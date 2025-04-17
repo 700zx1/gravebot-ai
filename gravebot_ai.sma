@@ -2,6 +2,15 @@
 #include <sockets>
 #include <json>
 #include <fakemeta>
+#include <config>
+#include <string>
+#include <amxmisc>
+
+// --- GraveBot native declarations (inline) ---
+native GetBotCount();
+native GetBotIdByIndex(botIndex);
+native GetBotRole(botId);
+native GetBotSubrole(botId);
 
 #define CONFIG_FILE "gravebot_ai_config.json"
 
@@ -32,26 +41,39 @@ static const g_Commands[][] = {
 public plugin_init()
 {
     register_plugin("GraveBot AI Bridge", "1.5", "You");
-    read_config_string(CONFIG_FILE, "host", g_Host, sizeof(g_Host));
-    g_Port = read_config_int(CONFIG_FILE, "port", 5000);
-    g_TickRate = read_config_float(CONFIG_FILE, "tick_rate", 0.1);
+    
+    new cfgfile[32], cvar[32];
+    copy(cfgfile, charsmax(cfgfile), CONFIG_FILE);
+    
+    // Read host
+    copy(cvar, charsmax(cvar), "host");
+    read_config_string(cfgfile, cvar, g_Host, charsmax(g_Host));
+    
+    // Read port
+    copy(cvar, charsmax(cvar), "port");
+    g_Port = read_config_int(cfgfile, cvar);
+    
+    // Read tick rate
+    copy(cvar, charsmax(cvar), "tick_rate");
+    g_TickRate = read_config_float(cfgfile, cvar);
 
     new error;
-    g_Socket = socket_open(g_Host, g_Port, SOCKET_TCP, error, SOCK_NONBLOCKING|SOCK_LIBC_ERRORS);
+    g_Socket = socket_open(g_Host, g_Port, SOCKET_TCP, error, SOCK_NON_BLOCKING | SOCK_LIBC_ERRORS);
     if (g_Socket == -1) {
         log_amx("GraveBot-AI: socket_open failed (%d)", error);
         return;
     }
 
     // Send COMMAND_LIST handshake
-    new buf[2048]; new pos = format(buf, sizeof(buf), "COMMAND_LIST");
+    new buf[2048];
+    new pos = format(buf, sizeof(buf), "COMMAND_LIST");
     for (new i = 0; i < sizeof g_Commands; i++) {
-        pos += format(buf[pos], sizeof(buf)-pos, ";%s", g_Commands[i]);
+        pos += format(buf[pos], sizeof(buf) - pos, ";%s", g_Commands[i]);
     }
-    socket_write(g_Socket, buf, pos);
+    socket_send(g_Socket, buf, pos);
 
     // Hook chat
-    register_message("SayText2", "OnSayText2");
+    register_message(get_user_msgid("SayText2"), "OnSayText2");
     set_task(g_TickRate, "BridgeTick", _, _, _, "rh");
 }
 
@@ -69,18 +91,20 @@ public BridgeTick()
 
     new jsonBuf[2048];
     BuildGameState(jsonBuf, sizeof(jsonBuf));
-    socket_write(g_Socket, jsonBuf, strlen(jsonBuf));
+    socket_send(g_Socket, jsonBuf, strlen(jsonBuf));
 
     new inBuf[256];
-    new read = socket_read(g_Socket, inBuf, sizeof(inBuf)-1);
+    new read = socket_recv(g_Socket, inBuf, sizeof(inBuf)-1);
     if (read > 0) {
-        inBuf[read] = '\0'; trim(inBuf);
+        inBuf[read] = 0;
+        trim(inBuf);
         if (strncmp(inBuf, "CHAT:", 5) == 0) {
             new msg[256];
-            strcopy(msg, sizeof(msg), inBuf[5]);
+            copy(msg, sizeof(msg), inBuf[5]);
             server_cmd("say %s", msg);
-            new writeBuf[300]; new wlen = format(writeBuf, sizeof(writeBuf), "TTS:%s", msg);
-            socket_write(g_Socket, writeBuf, wlen);
+            new writeBuf[300]; 
+            new wlen = format(writeBuf, sizeof(writeBuf), "TTS:%s", msg);
+            socket_send(g_Socket, writeBuf, wlen);
         } else {
             set_cvar_string("gravebot", inBuf);
         }
@@ -91,20 +115,21 @@ public BridgeTick()
 
 stock BuildGameState(dest[], destlen)
 {
-    new obj = JSON_CreateObject();
-    new map[64]; get_mapname(map, sizeof(map));
-    JSON_SetString(obj, "map", map);
+    new JSON:obj = json_init_object();
+    new map[64]; get_mapname(map, charsmax(map));
+    json_object_set_string(obj, "map", map);
     new Float:limit = get_cvar_float("mp_timelimit") * 60.0;
     new Float:elapsed = get_cvar_float("mp_time");
-    JSON_SetNumber(obj, "time_left", limit - elapsed);
+    json_object_set_number(obj, "time_left", floatround(limit - elapsed));
 
-    new arr = JSON_CreateArray();
+    new JSON:arr = json_init_array();
     new botCount = GetBotCount();
     for (new idx = 0; idx < botCount; idx++) {
         new id = GetBotIdByIndex(idx);
-        new bot = JSON_CreateObject();
-        JSON_SetNumber(bot, "id", id);
-        new r = GetBotRole(id), sr = GetBotSubrole(id);
+        new JSON:bot = json_init_object();
+        json_object_set_number(bot, "id", id);
+        new BotRole:r = GetBotRole(id);
+        new sr = GetBotSubrole(id);
         static const ROLE_NAMES[][] = {"ROLE_NONE","ROLE_DEFEND","ROLE_ATTACK"};
         static const SUBROLE_NAMES[][] = {
             "ROLE_SUB_NONE","ROLE_SUB_ATT_GET_SCI","ROLE_SUB_ATT_RTRN_SCI",
@@ -112,28 +137,30 @@ stock BuildGameState(dest[], destlen)
             "ROLE_SUB_ATT_BREAK","ROLE_SUB_DEF_ALLY","ROLE_SUB_DEF_SCIS",
             "ROLE_SUB_DEF_BASE","ROLE_SUB_DEF_RSRC","ROLE_SUB_DEF_BREAK"
         };
-        JSON_SetString(bot, "role", ROLE_NAMES[r]);
-        JSON_SetString(bot, "subrole", sr <= 11 ? SUBROLE_NAMES[sr] : "UNKNOWN");
+        json_object_set_string(bot, "role", ROLE_NAMES[r]);
+        json_object_set_string(bot, "subrole", sr <= 11 ? SUBROLE_NAMES[sr] : "UNKNOWN");
         new Float:origin[3]; get_user_origin(id, origin);
-        JSON_SetNumber(bot, "x", origin[0]); JSON_SetNumber(bot, "y", origin[1]);
-        JSON_SetNumber(bot, "z", origin[2]);
-        JSON_SetNumber(bot, "health", get_user_health(id));
-        JSON_SetNumber(bot, "armor", get_user_armor(id));
-        JSON_ArrayAdd(arr, bot);
+        json_object_set_number(bot, "x", floatround(origin[0]));
+        json_object_set_number(bot, "y", floatround(origin[1]));
+        json_object_set_number(bot, "z", floatround(origin[2]));
+        json_object_set_number(bot, "health", _:get_user_health(id));
+        json_object_set_number(bot, "armor", get_user_armor(id));
+        json_array_append_value(arr, bot);
     }
-    JSON_SetArray(obj, "bots", arr);
-    JSON_Print(dest, destlen, obj); JSON_Delete(obj);
+    json_object_set_value(obj, "bots", arr);
+    json_serial_to_string(obj, dest, destlen, false); 
+    json_free(obj);
     return strlen(dest);
 }
 
 public OnSayText2(id, msg_id, msg_name[], buffer[])
 {
-    new sender = read_byte(buffer);
-    new text[192]; msg_read_string(buffer, text, charsmax(text));
+    new sender = get_msg_arg_int(1);
+    new text[192]; get_msg_arg_string(2, text, charsmax(text));
     for (new i = 0; i < g_BotCount; i++) {
         if (sender == g_BotIds[i]) {
-            new out[256]; new len = format(out, sizeof(out), "TTS:%s", text);
-            socket_write(g_Socket, out, len);
+            new out[256]; new len = format(out, charsmax(out), "TTS:%s", text);
+            socket_send(g_Socket, out, len);
             break;
         }
     }
