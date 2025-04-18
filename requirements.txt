@@ -1,0 +1,8 @@
+# Install Coqui TTS from source on GitHub
+#git+https://github.com/coqui-ai/TTS.git@main#egg=TTS
+
+# Other dependencies
+TTS
+numpy
+simpleaudio
+openai

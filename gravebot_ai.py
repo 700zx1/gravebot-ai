@@ -43,7 +43,12 @@ def build_subgroups(state):
 openai.api_key = os.getenv("OPENAI_API_KEY")
 MODEL = "gpt-4o-mini"
 TEMPERATURE = 0.7
-tts_model = TTS(model_name="tts_models/en/vctk/vits", progress_bar=False, gpu=False)
+
+tts_model = TTS(
+    model_name="tts_models/en/ljspeech/tacotron2-DDC",
+    progress_bar=False,
+    gpu=False
+)
 
 last_command_time = time.time()
 last_command_lock = threading.Lock()
@@ -61,9 +66,13 @@ def decide_command(state, commands):
     )
     bot_lines = [f"Bot#{b['id']}(role={b['role']},sub={b['subrole']},hp={b['health']})" for b in state["bots"]]
     user_msg = " | ".join(bot_lines) + f" | Time left: {state.get('time_left',0)}"
-    resp = openai.ChatCompletion.create(
+    # New API format
+    resp = openai.chat.completions.create(
         model=MODEL,
-        messages=[{"role":"system","content":sys_msg},{"role":"user","content":user_msg}],
+        messages=[
+            {"role": "system", "content": sys_msg},
+            {"role": "user", "content": user_msg}
+        ],
         temperature=TEMPERATURE,
         max_tokens=16
     )
@@ -91,13 +100,15 @@ def handle_client(conn, addr):
         conn.close()
 
 def idle_loop():
+    global last_command_time  # Add this line
     while True:
         time.sleep(IDLE_INTERVAL)
         with last_command_lock:
             if time.time() - last_command_time >= IDLE_INTERVAL:
-                resp = openai.ChatCompletion.create(
+                # New API format
+                resp = openai.chat.completions.create(
                     model=MODEL,
-                    messages=[{"role":"system","content":"Generate a brief idle line."}],
+                    messages=[{"role": "system", "content": "Generate a brief idle line."}],
                     temperature=TEMPERATURE,
                     max_tokens=8
                 )
