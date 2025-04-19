@@ -7,10 +7,14 @@
 #include <amxmisc>
 
 // --- GraveBot native declarations (inline) ---
+native BotCheckRole(botId);
+native GetBotSubrole(botId);
+native RoleToString(role);
+native SubroleToString(subrole);
+native RoleCount();
+native RoleDetermine();
 native GetBotCount();
 native GetBotIdByIndex(botIndex);
-native GetBotRole(botId);
-native GetBotSubrole(botId);
 
 #define CONFIG_FILE "gravebot_ai_config.json"
 
@@ -120,7 +124,8 @@ stock BuildGameState(dest[], destlen)
     json_object_set_string(obj, "map", map);
     new Float:limit = get_cvar_float("mp_timelimit") * 60.0;
     new Float:elapsed = get_cvar_float("mp_time");
-    json_object_set_number(obj, "time_left", floatround(limit - elapsed));
+    new timeLeft = floatround(limit - elapsed);
+    json_object_set_number(obj, "time_left", timeLeft);
 
     new JSON:arr = json_init_array();
     new botCount = GetBotCount();
@@ -128,24 +133,20 @@ stock BuildGameState(dest[], destlen)
         new id = GetBotIdByIndex(idx);
         new JSON:bot = json_init_object();
         json_object_set_number(bot, "id", id);
-        new BotRole:r = GetBotRole(id);
-        new sr = GetBotSubrole(id);
-        static const ROLE_NAMES[][] = {"ROLE_NONE","ROLE_DEFEND","ROLE_ATTACK"};
-        static const SUBROLE_NAMES[][] = {
-            "ROLE_SUB_NONE","ROLE_SUB_ATT_GET_SCI","ROLE_SUB_ATT_RTRN_SCI",
-            "ROLE_SUB_ATT_KILL_SCI","ROLE_SUB_ATT_GET_RSRC","ROLE_SUB_ATT_RTRN_RSRC",
-            "ROLE_SUB_ATT_BREAK","ROLE_SUB_DEF_ALLY","ROLE_SUB_DEF_SCIS",
-            "ROLE_SUB_DEF_BASE","ROLE_SUB_DEF_RSRC","ROLE_SUB_DEF_BREAK"
-        };
-        json_object_set_string(bot, "role", ROLE_NAMES[r]);
-        json_object_set_string(bot, "subrole", sr <= 11 ? SUBROLE_NAMES[sr] : "UNKNOWN");
+        new role = BotCheckRole(id);
+        new subrole = GetBotSubrole(id);
+        new roleName[32], subroleName[32];
+        RoleToString(role, roleName, charsmax(roleName));
+        SubroleToString(subrole, subroleName, charsmax(subroleName));
+        json_object_set_string(bot, "role", roleName);
+        json_object_set_string(bot, "subrole", subroleName);
         new Float:origin[3]; get_user_origin(id, origin);
         json_object_set_number(bot, "x", floatround(origin[0]));
         json_object_set_number(bot, "y", floatround(origin[1]));
         json_object_set_number(bot, "z", floatround(origin[2]));
-        json_object_set_number(bot, "health", _:get_user_health(id));
+        json_object_set_number(bot, "health", get_user_health(id));
         json_object_set_number(bot, "armor", get_user_armor(id));
-        json_array_append_value(arr, bot);
+        json_array_push(arr, bot);
     }
     json_object_set_value(obj, "bots", arr);
     json_serial_to_string(obj, dest, destlen, false); 

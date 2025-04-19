@@ -15,7 +15,6 @@ import subprocess
 
 import numpy as np
 import soundfile as sf
-import pyaudio
 import openai
 from TTS.api import TTS
 
