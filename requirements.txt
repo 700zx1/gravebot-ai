@@ -3,6 +3,22 @@
 
 # Other dependencies
 TTS
+cffi
 numpy
 simpleaudio
 openai
+soundfile
+typing_extensions
+pydantic
+pydantic_core
+typing_inspection
+annotated_types
+httpx
+idna
+sniffio
+anyio
+distro
+jiter
+torch
+librosa
+#PyAudio==0.2.13

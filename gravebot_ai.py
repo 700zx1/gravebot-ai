@@ -10,9 +10,12 @@ import logging
 import json
 import time
 import random
+import tempfile
+import subprocess
 
 import numpy as np
-import simpleaudio as sa
+import soundfile as sf
+import pyaudio
 import openai
 from TTS.api import TTS
 
@@ -40,8 +43,8 @@ def build_subgroups(state):
     return subs
 
 # LLM & TTS setup
-openai.api_key = os.getenv("OPENAI_API_KEY")
-MODEL = "gpt-4o-mini"
+client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+MODEL = cfg.get("model", "gpt-4o-mini")
 TEMPERATURE = 0.7
 
 tts_model = TTS(
@@ -54,10 +57,36 @@ last_command_time = time.time()
 last_command_lock = threading.Lock()
 
 def tts_play(text: str):
-    waveform = tts_model.tts(text=text)
+    try:
+        # Attempt to disable sentence splitting
+        wave_output = tts_model.tts(
+            text=text,
+            split_sentences=False,
+            enable_text_splitting=False
+        )
+    except TypeError:
+        # Fallback if parameters not supported
+        wave_output = tts_model.tts(text=text)
+
+    # Flatten list of arrays into one numpy array
+    if isinstance(wave_output, list):
+        chunks = [np.atleast_1d(chunk) for chunk in wave_output]
+        waveform = np.concatenate(chunks, axis=0)
+    else:
+        waveform = wave_output if isinstance(wave_output, np.ndarray) else np.atleast_1d(wave_output)
+
+    # Convert waveform to 16-bit PCM
     sr = tts_model.synthesizer.output_sample_rate
-    pcm = (waveform * 32767).astype(np.int16)
-    sa.play_buffer(pcm.tobytes(), 1, 2, sr)
+    pcm_data = (waveform * 32767).astype(np.int16)
+
+    try:
+        # Play audio using simpleaudio
+        import simpleaudio as sa
+        play_obj = sa.play_buffer(pcm_data, 1, 2, sr)
+        play_obj.wait_done()
+    except Exception as e:
+        logging.error(f"Failed to play audio: {str(e)}")
+
 
 def decide_command(state, commands):
     sys_msg = (
@@ -66,8 +95,9 @@ def decide_command(state, commands):
     )
     bot_lines = [f"Bot#{b['id']}(role={b['role']},sub={b['subrole']},hp={b['health']})" for b in state["bots"]]
     user_msg = " | ".join(bot_lines) + f" | Time left: {state.get('time_left',0)}"
+    
     # New API format
-    resp = openai.chat.completions.create(
+    resp = client.chat.completions.create(
         model=MODEL,
         messages=[
             {"role": "system", "content": sys_msg},
@@ -79,16 +109,19 @@ def decide_command(state, commands):
     cmd = resp.choices[0].message.content.strip()
     return cmd if cmd in commands else "help"
 
+
 def handle_client(conn, addr):
     global last_command_time
     data = conn.recv(4096).decode(errors="ignore")
     if not data.startswith("COMMAND_LIST;"):
-        conn.close(); return
+        conn.close()
+        return
     cmds = data.strip().split(";")[1:]
     try:
         while True:
             raw = conn.recv(8192)
-            if not raw: break
+            if not raw:
+                break
             state = json.loads(raw.decode(errors="ignore"))
             cmd = decide_command(state, cmds)
             conn.sendall(cmd.encode())
@@ -99,14 +132,15 @@ def handle_client(conn, addr):
     finally:
         conn.close()
 
+
 def idle_loop():
-    global last_command_time  # Add this line
+    global last_command_time
     while True:
         time.sleep(IDLE_INTERVAL)
         with last_command_lock:
             if time.time() - last_command_time >= IDLE_INTERVAL:
                 # New API format
-                resp = openai.chat.completions.create(
+                resp = client.chat.completions.create(
                     model=MODEL,
                     messages=[{"role": "system", "content": "Generate a brief idle line."}],
                     temperature=TEMPERATURE,
@@ -117,14 +151,17 @@ def idle_loop():
                 with last_command_lock:
                     last_command_time = time.time()
 
+
 def main():
     logging.basicConfig(level=logging.INFO)
     threading.Thread(target=idle_loop, daemon=True).start()
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.bind((HOST, PORT)); srv.listen(1)
+    srv.bind((HOST, PORT))
+    srv.listen(1)
     while True:
         conn, addr = srv.accept()
         threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
+
 
 if __name__ == "__main__":
     main()

@@ -3,6 +3,7 @@
   "port": 5000,
   "tick_rate": 0.1,
   "idle_interval": 30,
+  "model": "gpt-4o-mini",
   "role_constraints": {
     "ROLE_DEFEND": 2,
     "ROLE_ATTACK": 3
